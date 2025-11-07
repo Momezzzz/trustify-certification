@@ -153,17 +153,6 @@ const ApplicationCard = React.memo(({ application, onViewCertificate, onDownload
           <span>VER CERTIFICADO</span>
         </button>
         
-        {application.status === 'approved' && (
-          <button
-            onClick={() => onDownloadPDF(application)}
-            className="px-4 py-2 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 flex items-center space-x-2 text-sm flex-1 min-w-[140px] justify-center text-white"
-            style={{
-              background: `linear-gradient(135deg, #10b981, #059669)`
-            }}
-          >
-            <span>DESCARGAR PDF</span>
-          </button>
-        )}
       </div>
     </div>
   );
@@ -202,7 +191,7 @@ const CertificateModal = ({ application, onClose, onDownload }) => {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
       <div className="bg-white rounded-xl w-full max-w-2xl my-4 mx-auto">
-        {/* Header del modal */}
+      
         <div 
           className="border-b p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 rounded-t-xl text-white"
           style={{ 
@@ -1004,7 +993,6 @@ const StudentDashboard = () => {
                 <div 
                   className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
                   style={{
-                    background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
                   }}
                 >
                   <span className="text-white text-sm">👤</span>
@@ -1021,7 +1009,7 @@ const StudentDashboard = () => {
                   background: `linear-gradient(135deg, #ef4444, #dc2626)`
                 }}
               >
-                <span>🔒</span>
+                <span>CERRAR SESIÓN</span>
                 <span className="hidden xs:inline">CERRAR SESIÓN</span>
               </button>
             </div>
