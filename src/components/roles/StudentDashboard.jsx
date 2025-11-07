@@ -1,9 +1,642 @@
-import React, { useState, useEffect } from 'react';
-import { collection, addDoc, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { collection, addDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { db, auth } from '../../services/firebase';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+
+// Configuración de colores exactos según especificaciones
+const COLOR_PALETTE = {
+  primary: {
+    hex: '#1d3763',
+    rgb: '29, 55, 99',
+    cmyk: '98, 81, 33, 24',
+    lab: '23, 2, -30'
+  },
+  secondary: '#2d4d85',
+  accent: '#3a5da8',
+  light: '#f8fafc',
+  dark: '#1a1a1a',
+  gray: {
+    50: '#f9fafb',
+    100: '#f3f4f6',
+    200: '#e5e7eb',
+    300: '#d1d5db',
+    400: '#9ca3af',
+    500: '#6b7280',
+    600: '#4b5563',
+    700: '#374151',
+    800: '#1f2937',
+    900: '#111827'
+  }
+};
+
+// Componente para la tarjeta de aplicación
+const ApplicationCard = React.memo(({ application, onViewCertificate, onDownloadPDF }) => {
+  const statusInfo = useMemo(() => {
+    switch (application.status) {
+      case 'approved':
+        return { 
+          color: 'bg-green-100 text-green-800 border-green-200', 
+          text: 'APROBADA',
+          icon: '✅'
+        };
+      case 'rejected':
+        return { 
+          color: 'bg-red-100 text-red-800 border-red-200', 
+          text: 'RECHAZADA',
+          icon: '❌'
+        };
+      case 'under_review':
+        return { 
+          color: 'bg-blue-100 text-blue-800 border-blue-200', 
+          text: 'EN REVISIÓN',
+          icon: '🔍'
+        };
+      default:
+        return { 
+          color: 'bg-yellow-100 text-yellow-800 border-yellow-200', 
+          text: 'PENDIENTE',
+          icon: '⏳'
+        };
+    }
+  }, [application.status]);
+
+  const formatTextToUpperCase = useCallback((text) => {
+    return text ? text.toUpperCase() : '';
+  }, []);
+
+  const formatDate = useCallback((dateString) => {
+    if (!dateString) return 'N/A';
+    try {
+      return new Date(dateString).toLocaleDateString('es-ES');
+    } catch {
+      return 'Fecha inválida';
+    }
+  }, []);
+
+  const calculateDuration = useCallback((startDate, endDate) => {
+    if (!startDate || !endDate) return 0;
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+      return Math.max(0, months);
+    } catch {
+      return 0;
+    }
+  }, []);
+
+  const duration = calculateDuration(application.startDate, application.endDate);
+
+  return (
+    <div className="border border-gray-200 rounded-lg p-4 hover:shadow-lg transition-all duration-300 bg-white w-full">
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-2 mb-3">
+        <div className="flex-1 min-w-0">
+          <h4 className="text-base font-bold text-gray-900 truncate">
+            {formatTextToUpperCase(application.firstName)} {formatTextToUpperCase(application.lastName)}
+          </h4>
+          <p className="text-sm text-gray-600 truncate">
+            {formatTextToUpperCase(application.institution)} - {formatTextToUpperCase(application.program)}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            Creado: {formatDate(application.createdAt)}
+          </p>
+        </div>
+        <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusInfo.color} flex items-center space-x-1 w-fit`}>
+          <span>{statusInfo.icon}</span>
+          <span>{statusInfo.text}</span>
+        </span>
+      </div>
+
+      <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: `${COLOR_PALETTE.primary.hex}15` }}>
+        <p className="text-xs font-semibold mb-1" style={{ color: COLOR_PALETTE.primary.hex }}>
+          CÓDIGO DE VERIFICACIÓN:
+        </p>
+        <p className="text-base font-bold font-mono tracking-wide break-all" style={{ color: COLOR_PALETTE.primary.hex }}>
+          {application.verificationCode || application.id}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-3">
+        <div className="space-y-1">
+          <p className="break-words">
+            <strong>PERÍODO:</strong> {formatDate(application.startDate)} - {formatDate(application.endDate)}
+          </p>
+          <p className="break-words">
+            <strong>DOCUMENTO:</strong> {formatTextToUpperCase(application.documentNumber)}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p>
+            <strong>DURACIÓN:</strong> {duration} MESES
+          </p>
+          <p className="break-words">
+            <strong>UBICACIÓN:</strong> {formatTextToUpperCase(application.plantLocation)}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => onViewCertificate(application)}
+          disabled={application.status !== 'approved'}
+          className={`px-4 py-2 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 flex items-center space-x-2 text-sm flex-1 min-w-[140px] justify-center ${
+            application.status === 'approved' 
+              ? 'text-white' 
+              : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+          }`}
+          style={application.status === 'approved' ? {
+            background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+          } : {}}
+        >
+          <span>VER CERTIFICADO</span>
+        </button>
+        
+        {application.status === 'approved' && (
+          <button
+            onClick={() => onDownloadPDF(application)}
+            className="px-4 py-2 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 flex items-center space-x-2 text-sm flex-1 min-w-[140px] justify-center text-white"
+            style={{
+              background: `linear-gradient(135deg, #10b981, #059669)`
+            }}
+          >
+            <span>DESCARGAR PDF</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const CertificateModal = ({ application, onClose, onDownload }) => {
+  const formatTextToUpperCase = (text) => {
+    return text ? text.toUpperCase() : '';
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    try {
+      return new Date(dateString).toLocaleDateString('es-ES');
+    } catch {
+      return 'Fecha inválida';
+    }
+  };
+
+  const calculateDuration = (startDate, endDate) => {
+    if (!startDate || !endDate) return 0;
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+      return Math.max(0, months);
+    } catch {
+      return 0;
+    }
+  };
+
+  const duration = calculateDuration(application.startDate, application.endDate);
+
+  if (!application) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+      <div className="bg-white rounded-xl w-full max-w-2xl my-4 mx-auto">
+        {/* Header del modal */}
+        <div 
+          className="border-b p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 rounded-t-xl text-white"
+          style={{ 
+            background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+          }}
+        >
+          <h3 className="text-lg font-bold">VISTA PREVIA DEL CERTIFICADO</h3>
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            <button
+              onClick={onDownload}
+              className="bg-white text-green-700 px-3 py-2 rounded-lg hover:shadow-lg transition-all duration-300 flex items-center space-x-2 text-sm flex-1 sm:flex-none justify-center"
+            >
+
+              <span>DESCARGAR PDF</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="bg-white text-red-700 px-3 py-2 rounded-lg hover:shadow-lg transition-all duration-300 flex items-center space-x-2 text-sm flex-1 sm:flex-none justify-center"
+            >
+              <span>✕</span>
+              <span>CERRAR</span>
+            </button>
+          </div>
+        </div>
+        
+        {/* Contenido del certificado */}
+        <div className="p-4 overflow-y-auto max-h-[70vh]">
+          <div id="certificate-preview" className="bg-white p-4 rounded-xl shadow-2xl border border-gray-200 w-full max-w-md mx-auto">
+            
+            {/* Encabezado del certificado */}
+            <div 
+              className="rounded-lg p-4 text-center text-white mb-4"
+              style={{ 
+                background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+              }}
+            >
+              <h1 className="text-xl font-bold mb-2">
+                CERTIFICADO DE PASANTÍA
+              </h1>
+              <p className="text-sm font-light">
+                SISTEMA DE CERTIFICACIÓN
+              </p>
+            </div>
+
+            {/* Código de verificación */}
+            <div 
+              className="border rounded-lg p-3 mb-4 text-center"
+              style={{ 
+                backgroundColor: `${COLOR_PALETTE.primary.hex}10`,
+                borderColor: `${COLOR_PALETTE.primary.hex}30`
+              }}
+            >
+              <p className="text-sm font-semibold mb-2" style={{ color: COLOR_PALETTE.primary.hex }}>
+                CÓDIGO DE VERIFICACIÓN ÚNICO
+              </p>
+              <p className="text-lg font-bold font-mono tracking-wider break-all" style={{ color: COLOR_PALETTE.primary.hex }}>
+                {application.verificationCode || application.id}
+              </p>
+              <p className="text-xs mt-2" style={{ color: COLOR_PALETTE.primary.hex }}>
+                CÓDIGO PARA VERIFICAR AUTENTICIDAD
+              </p>
+            </div>
+
+            {/* Información del estudiante */}
+            <div className="text-center mb-4">
+              <p className="text-sm text-gray-600 mb-3">
+                SE CERTIFICA QUE
+              </p>
+              <h2 className="text-lg font-bold leading-tight break-words mb-2" style={{ color: COLOR_PALETTE.primary.hex }}>
+                {formatTextToUpperCase(application.firstName)} {formatTextToUpperCase(application.lastName)}
+              </h2>
+              <p className="text-sm text-gray-700 mb-2">
+                IDENTIFICADO CON DOCUMENTO NÚMERO
+              </p>
+              <p className="text-base font-semibold mb-3 break-all" style={{ color: COLOR_PALETTE.accent }}>
+                {formatTextToUpperCase(application.documentNumber)}
+              </p>
+            </div>
+
+            {/* Información académica */}
+            <div className="space-y-4 mb-4">
+              <div 
+                className="rounded-lg p-3"
+                style={{ backgroundColor: `${COLOR_PALETTE.primary.hex}08` }}
+              >
+                <h3 className="font-semibold mb-2 text-sm" style={{ color: COLOR_PALETTE.primary.hex }}>
+                  INFORMACIÓN ACADÉMICA
+                </h3>
+                <div className="space-y-1">
+                  <p className="text-sm break-words">
+                    <strong>INSTITUCIÓN:</strong> {formatTextToUpperCase(application.institution)}
+                  </p>
+                  <p className="text-sm break-words">
+                    <strong>PROGRAMA:</strong> {formatTextToUpperCase(application.program)}
+                  </p>
+                  <p className="text-sm">
+                    <strong>DURACIÓN:</strong> {duration} MESES
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className="rounded-lg p-3"
+                style={{ backgroundColor: `${COLOR_PALETTE.primary.hex}08` }}
+              >
+                <h3 className="font-semibold mb-2 text-sm" style={{ color: COLOR_PALETTE.primary.hex }}>
+                  PERIODO DE PASANTÍA
+                </h3>
+                <div className="space-y-1">
+                  <p className="text-sm">
+                    <strong>INICIO:</strong> {formatDate(application.startDate)}
+                  </p>
+                  <p className="text-sm">
+                    <strong>FIN:</strong> {formatDate(application.endDate)}
+                  </p>
+                  <p className="text-sm break-words">
+                    <strong>TIPO DE PLANTA:</strong> {formatTextToUpperCase(application.plantType)}
+                  </p>
+                  <p className="text-sm break-words">
+                    <strong>UBICACIÓN:</strong> {formatTextToUpperCase(application.plantLocation)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Actividades */}
+            {application.activities && (
+              <div 
+                className="rounded-lg p-3 mb-4"
+                style={{ backgroundColor: `${COLOR_PALETTE.primary.hex}10` }}
+              >
+                <h3 className="font-semibold mb-2 text-sm" style={{ color: COLOR_PALETTE.primary.hex }}>
+                  ACTIVIDADES REALIZADAS
+                </h3>
+                <p className="text-sm text-gray-700 leading-relaxed break-words">
+                  {formatTextToUpperCase(application.activities)}
+                </p>
+              </div>
+            )}
+
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 text-center italic mb-3">
+                Por lo tanto, se certifica que el/la estudiante mencionado(a) cumplió satisfactoriamente 
+                con el programa de pasantías en el periodo establecido.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 pt-4 border-t border-gray-300">
+              <div className="text-center">
+                <div className="border-t border-gray-400 mt-2 pt-2 mx-auto w-32">
+                  <p className="text-sm font-semibold text-gray-700 mb-1">TUTOR</p>
+                  <p className="text-sm text-gray-600 break-words">
+                    {formatTextToUpperCase(application.tutorName)}
+                  </p>
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="border-t border-gray-400 mt-2 pt-2 mx-auto w-32">
+                  <p className="text-sm font-semibold text-gray-700 mb-1">COORDINADOR</p>
+                  <p className="text-sm text-gray-600"></p>
+                  <p className="text-xs text-gray-500 mt-1">{new Date().toLocaleDateString('es-ES')}</p>
+                </div>
+              </div>
+          
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+const ApplicationSkeleton = () => (
+  <div className="border border-gray-200 rounded-lg p-4 animate-pulse w-full">
+    <div className="flex flex-col sm:flex-row gap-3">
+      <div className="flex-1 space-y-2">
+        <div className="h-4 bg-gray-300 rounded w-3/4"></div>
+        <div className="h-3 bg-gray-300 rounded w-1/2"></div>
+        <div className="h-3 bg-gray-300 rounded w-1/4"></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+          <div className="h-3 bg-gray-300 rounded"></div>
+          <div className="h-3 bg-gray-300 rounded"></div>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-3">
+          <div className="h-8 bg-gray-300 rounded w-24 flex-1 min-w-[140px]"></div>
+          <div className="h-8 bg-gray-300 rounded w-24 flex-1 min-w-[140px]"></div>
+        </div>
+      </div>
+      <div className="w-20 h-6 bg-gray-300 rounded-full"></div>
+    </div>
+  </div>
+);
+
+const ApplicationFormModal = ({ show, onClose, onSubmit, formData, setFormData, loading }) => {
+  const getPlantLocationOptions = (plantType) => {
+    if (plantType === 'INTERNA') {
+      return [
+        'GIT ADMINISTRACIÓN DE PERSONAL',
+        'GIT PRESTACIONES SOCIALES',
+        'GIT DE REFUGIO'
+      ];
+    } else if (plantType === 'EXTERNA') {
+      return [
+        'CONSULADO DE BARCELONA',
+        'EMBAJADA DE BERLIN (ALEMANIA)',
+        'MISIÓN DE LA ONU EN WASHINGTON D.C'
+      ];
+    }
+    return [];
+  };
+
+  const plantLocationOptions = getPlantLocationOptions(formData.plantType);
+
+  if (!show) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div 
+          className="border-b p-4 flex justify-between items-center rounded-t-xl text-white"
+          style={{ 
+            background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+          }}
+        >
+          <h3 className="text-lg font-bold">NUEVA SOLICITUD DE PASANTÍA</h3>
+          <button
+            onClick={onClose}
+            className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white p-2 rounded-lg transition-all duration-300"
+          >
+            <span>✕</span>
+          </button>
+        </div>
+        
+        <form onSubmit={onSubmit} className="p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                NÚMERO DE DOCUMENTO *
+              </label>
+              <input
+                type="text"
+                required
+                value={formData.documentNumber}
+                onChange={(e) => setFormData(prev => ({ ...prev, documentNumber: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm"
+                placeholder="Ingresa tu número de documento"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                INSTITUCIÓN EDUCATIVA *
+              </label>
+              <input
+                type="text"
+                required
+                value={formData.institution}
+                onChange={(e) => setFormData(prev => ({ ...prev, institution: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm"
+                placeholder="Nombre de tu institución"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                PROGRAMA ACADÉMICO *
+              </label>
+              <input
+                type="text"
+                required
+                value={formData.program}
+                onChange={(e) => setFormData(prev => ({ ...prev, program: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm"
+                placeholder="Tu programa de estudios"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                FECHA DE INICIO *
+              </label>
+              <input
+                type="date"
+                required
+                value={formData.startDate}
+                onChange={(e) => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                FECHA DE FIN *
+              </label>
+              <input
+                type="date"
+                required
+                value={formData.endDate}
+                onChange={(e) => setFormData(prev => ({ ...prev, endDate: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                TIPO DE PLANTA *
+              </label>
+              <select
+                required
+                value={formData.plantType}
+                onChange={(e) => setFormData(prev => ({ ...prev, plantType: e.target.value, plantLocation: '' }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm"
+              >
+                <option value="">Selecciona el tipo</option>
+                <option value="INTERNA">INTERNA</option>
+                <option value="EXTERNA">EXTERNA</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                UBICACIÓN DE PLANTA *
+              </label>
+              <select
+                required
+                value={formData.plantLocation}
+                onChange={(e) => setFormData(prev => ({ ...prev, plantLocation: e.target.value }))}
+                disabled={!formData.plantType}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+              >
+                <option value="">Selecciona ubicación</option>
+                {plantLocationOptions.map((option, index) => (
+                  <option key={index} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                ACTIVIDADES A REALIZAR *
+              </label>
+              <textarea
+                required
+                value={formData.activities}
+                onChange={(e) => setFormData(prev => ({ ...prev, activities: e.target.value }))}
+                rows="4"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:border-transparent transition-all duration-300 text-sm resize-none"
+                placeholder="Describe las actividades que realizarás durante tu pasantía..."
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row justify-end gap-2 mt-6 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all duration-300 disabled:opacity-50 text-sm flex-1 sm:flex-none order-2 sm:order-1"
+            >
+              CANCELAR
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="text-white px-4 py-2 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 disabled:opacity-50 flex items-center justify-center space-x-2 text-sm flex-1 sm:flex-none order-1 sm:order-2"
+              style={{
+                background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+              }}
+            >
+              {loading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>ENVIANDO...</span>
+                </>
+              ) : (
+                <>
+                  <span>📨</span>
+                  <span>ENVIAR SOLICITUD</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Modal de confirmación de logout
+const LogoutModal = ({ show, onClose, onConfirm }) => {
+  if (!show) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl w-full max-w-md">
+        <div 
+          className="rounded-t-xl p-6 text-center text-white"
+          style={{
+            background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+          }}
+        >
+          <div className="w-16 h-16 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="text-2xl">🔒</span>
+          </div>
+          <h3 className="text-xl font-bold mb-2">CERRAR SESIÓN</h3>
+          <p className="opacity-90">¿Estás seguro de que quieres cerrar tu sesión?</p>
+        </div>
+        
+        <div className="p-6">
+          <div className="flex flex-col sm:flex-row justify-center gap-3">
+            <button
+              onClick={onClose}
+              className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all duration-300 text-sm flex-1 sm:flex-none order-2 sm:order-1"
+            >
+              CANCELAR
+            </button>
+            <button
+              onClick={onConfirm}
+              className="px-6 py-2 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 text-white text-sm flex-1 sm:flex-none order-1 sm:order-2"
+              style={{
+                background: `linear-gradient(135deg, #ef4444, #dc2626)`
+              }}
+            >
+              CERRAR SESIÓN
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const StudentDashboard = () => {
   const [showForm, setShowForm] = useState(false);
@@ -12,8 +645,9 @@ const StudentDashboard = () => {
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [showCertificateModal, setShowCertificateModal] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  const [userData, setUserData] = useState(null);
   const [loadingApplications, setLoadingApplications] = useState(true);
+  const [error, setError] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
   
   const [formData, setFormData] = useState({
     documentNumber: '',
@@ -26,46 +660,42 @@ const StudentDashboard = () => {
     activities: ''
   });
 
-  const siteConfig = {
+  const siteConfig = useMemo(() => ({
     name: 'TRUSTIFY',
     description: 'SISTEMA DE CERTIFICACIÓN',
     logo: '🔒',
-    primaryColor: '#1d3763',
-    secondaryColor: '#2d4d85'
-  };
+    primaryColor: COLOR_PALETTE.primary.hex,
+    secondaryColor: COLOR_PALETTE.secondary
+  }), []);
 
-  // Listener SIMPLIFICADO - sin orderBy que cause error
+  // Configuración de paginación
+  const applicationsPerPage = 5;
+  const indexOfLastApp = currentPage * applicationsPerPage;
+  const indexOfFirstApp = indexOfLastApp - applicationsPerPage;
+  const currentApplications = myApplications.slice(indexOfFirstApp, indexOfLastApp);
+  const totalPages = Math.ceil(myApplications.length / applicationsPerPage);
+
+  // Listener de Firestore
   useEffect(() => {
     const loadApplications = async () => {
       const user = auth.currentUser;
       if (!user) {
-        console.log('❌ No hay usuario autenticado');
+        console.log('No hay usuario autenticado');
         setLoadingApplications(false);
         return;
       }
 
-      console.log('👤 Usuario actual:', user.uid);
-      
       try {
         setLoadingApplications(true);
         
-        // Query SIMPLIFICADA - solo el where, sin orderBy
         const q = query(
           collection(db, 'internshipApplications'), 
           where('studentId', '==', user.uid)
-          // Removido: orderBy('createdAt', 'desc') - esto causa el error
         );
 
-        console.log('🔍 Query creada (sin orderBy)...');
-
-        // Configurar listener en tiempo real
         const unsubscribe = onSnapshot(q, 
           (snapshot) => {
-            console.log('✅ Datos recibidos de Firestore');
-            console.log('📊 Número de documentos:', snapshot.size);
-            
             if (snapshot.empty) {
-              console.log('📭 No se encontraron solicitudes');
               setMyApplications([]);
               setLoadingApplications(false);
               return;
@@ -83,20 +713,18 @@ const StudentDashboard = () => {
               });
             });
 
-            // ORDENAR MANUALMENTE por fecha de creación (más reciente primero)
             applications.sort((a, b) => {
               const dateA = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt);
               const dateB = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt);
-              return dateB - dateA; // Orden descendente (más reciente primero)
+              return dateB - dateA;
             });
             
-            console.log('🎯 Solicitudes procesadas y ordenadas:', applications.length);
             setMyApplications(applications);
             setLoadingApplications(false);
           },
           (error) => {
-            console.error('❌ Error en listener de Firestore:', error);
-            showMessage('error', 'Error al cargar solicitudes');
+            console.error('Error en listener de Firestore:', error);
+            setError('Error al cargar solicitudes');
             setLoadingApplications(false);
           }
         );
@@ -104,14 +732,22 @@ const StudentDashboard = () => {
         return () => unsubscribe();
 
       } catch (error) {
-        console.error('❌ Error configurando listener:', error);
-        showMessage('error', 'Error de conexión');
+        console.error('Error configurando listener:', error);
+        setError('Error de conexión');
         setLoadingApplications(false);
       }
     };
 
     loadApplications();
   }, []);
+
+  // Efecto para mostrar errores
+  useEffect(() => {
+    if (error) {
+      showMessage('error', error);
+      setError(null);
+    }
+  }, [error]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -170,7 +806,7 @@ const StudentDashboard = () => {
         studentEmail: user.email,
         status: 'pending',
         verificationCode: generateVerificationCode(),
-        createdAt: new Date(), // Fecha actual para ordenamiento
+        createdAt: new Date(),
         updatedAt: new Date()
       };
 
@@ -193,8 +829,8 @@ const StudentDashboard = () => {
       showMessage('success', '✅ SOLICITUD ENVIADA CORRECTAMENTE');
       
     } catch (error) {
-      console.error('❌ Error al enviar solicitud:', error);
-      showMessage('error', error.message);
+      console.error('Error al enviar solicitud:', error);
+      setError(error.message);
     } finally {
       setLoading(false);
     }
@@ -206,37 +842,12 @@ const StudentDashboard = () => {
     return `TRF-${timestamp}-${random}`.toUpperCase();
   };
 
-  const getStatusInfo = (status) => {
-    switch (status) {
-      case 'approved':
-        return { 
-          color: 'bg-green-100 text-green-800 border-green-200', 
-          text: 'APROBADA',
-        };
-      case 'rejected':
-        return { 
-          color: 'bg-red-100 text-red-800 border-red-200', 
-          text: 'RECHAZADA', 
-        };
-      case 'under_review':
-        return { 
-          color: 'bg-blue-100 text-blue-800 border-blue-200', 
-          text: 'EN REVISIÓN', 
-        };
-      default:
-        return { 
-          color: 'bg-yellow-100 text-yellow-800 border-yellow-200', 
-          text: 'PENDIENTE', 
-        };
-    }
-  };
-
   const showMessage = (type, text) => {
     const existingMessages = document.querySelectorAll('.custom-message');
     existingMessages.forEach(msg => msg.remove());
 
     const messageDiv = document.createElement('div');
-    messageDiv.className = `custom-message fixed top-20 right-4 z-50 p-4 rounded-2xl border-l-4 transform transition-all duration-500 font-nunito ${
+    messageDiv.className = `custom-message fixed top-20 right-4 z-50 p-4 rounded-lg border-l-4 max-w-md ${
       type === 'error' 
         ? 'bg-red-50 text-red-700 border-red-400 shadow-lg' 
         : 'bg-green-50 text-green-700 border-green-400 shadow-lg'
@@ -244,7 +855,7 @@ const StudentDashboard = () => {
     messageDiv.innerHTML = `
       <div class="flex items-center">
         <span class="text-lg mr-2">${type === 'error' ? '❌' : '✅'}</span>
-        <span class="font-medium font-nunito">${text}</span>
+        <span class="font-medium text-sm">${text}</span>
       </div>
     `;
     
@@ -267,149 +878,20 @@ const StudentDashboard = () => {
     };
   };
 
-  const formatTextToUpperCase = (text) => {
-    return text ? text.toUpperCase() : '';
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    try {
-      return new Date(dateString).toLocaleDateString('es-ES');
-    } catch {
-      return 'Fecha inválida';
-    }
-  };
-
-  const getPlantLocationOptions = (plantType) => {
-    if (plantType === 'INTERNA') {
-      return [
-        'GIT ADMINISTRACIÓN DE PERSONAL',
-        'GIT PRESTACIONES SOCIALES',
-        'GIT DE REFUGIO'
-      ];
-    } else if (plantType === 'EXTERNA') {
-      return [
-        'CONSULADO DE BARCELONA',
-        'EMBAJADA DE BERLIN (ALEMANIA)',
-        'MISIÓN DE LA ONU EN WASHINGTON D.C'
-      ];
-    }
-    return [];
-  };
-
-  const calculateDuration = (startDate, endDate) => {
-    if (!startDate || !endDate) return 0;
-    try {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
-      return Math.max(0, months);
-    } catch {
-      return 0;
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      showMessage('success', '👋 SESIÓN CERRADA CORRECTAMENTE');
-      setTimeout(() => {
-        window.location.href = '/login';
-      }, 2000);
-    } catch (error) {
-      showMessage('error', '❌ ERROR AL CERRAR SESIÓN');
-    }
-  };
-
-  const CertificatePreview = ({ application }) => {
-    const duration = calculateDuration(application.startDate, application.endDate);
-    
-    return (
-      <div id="certificate-preview" className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl shadow-2xl border border-gray-200 w-full max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg xl:max-w-xl mx-auto scale-90 sm:scale-95 md:scale-100">
-        <div className={`bg-gradient-to-r from-blue-600 to-blue-800 rounded-t-xl sm:rounded-t-2xl p-3 sm:p-4 md:p-6 text-center text-white mb-4 sm:mb-6 md:mb-8`}>
-          <h1 className="text-lg sm:text-xl md:text-2xl lg:text-3xl xl:text-4xl font-bold font-nunito mb-1 sm:mb-2">CERTIFICADO DE PASANTÍA</h1>
-          <p className="text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl font-light font-nunito">SISTEMA DE CERTIFICACIÓN INTELIGENTE</p>
-        </div>
-
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl sm:rounded-2xl p-2 sm:p-3 md:p-4 mb-4 sm:mb-6 text-center">
-          <p className="text-xs font-semibold text-yellow-800 font-nunito mb-1">CÓDIGO DE VERIFICACIÓN ÚNICO</p>
-          <p className="text-sm sm:text-base md:text-lg lg:text-xl xl:text-2xl font-bold text-blue-600 font-mono tracking-wider">
-            {application.verificationCode || application.id}
-          </p>
-          <p className="text-xs text-yellow-600 mt-1 sm:mt-2 font-nunito">CÓDIGO PARA VERIFICAR AUTENTICIDAD</p>
-        </div>
-
-        <div className="text-center mb-4 sm:mb-6 md:mb-8">
-          <p className="text-sm sm:text-base text-gray-600 mb-3 sm:mb-4 md:mb-6 font-nunito">SE CERTIFICA QUE</p>
-          <h2 className="text-base sm:text-lg md:text-xl lg:text-2xl xl:text-3xl font-bold text-blue-600 font-nunito leading-tight">
-            {formatTextToUpperCase(application.firstName)} {formatTextToUpperCase(application.lastName)}
-          </h2>
-          <p className="text-sm sm:text-base text-gray-700 mb-2 sm:mb-3 md:mb-4 font-nunito">IDENTIFICADO CON DOCUMENTO NÚMERO</p>
-          <p className="text-sm sm:text-base md:text-lg lg:text-xl font-semibold text-blue-500 mb-3 sm:mb-4 font-nunito">
-            {formatTextToUpperCase(application.documentNumber)}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 mb-4 sm:mb-6 md:mb-8">
-          <div className="bg-gray-50 rounded-xl sm:rounded-2xl p-2 sm:p-3 md:p-4">
-            <h3 className="font-semibold text-blue-600 mb-2 font-nunito text-xs sm:text-sm">INFORMACIÓN ACADÉMICA</h3>
-            <p className="text-xs mb-1 font-nunito"><strong>INSTITUCIÓN:</strong> {formatTextToUpperCase(application.institution)}</p>
-            <p className="text-xs mb-1 font-nunito"><strong>PROGRAMA:</strong> {formatTextToUpperCase(application.program)}</p>
-            <p className="text-xs font-nunito"><strong>DURACIÓN:</strong> {duration} MESES</p>
-          </div>
-          
-          <div className="bg-gray-50 rounded-xl sm:rounded-2xl p-2 sm:p-3 md:p-4">
-            <h3 className="font-semibold text-blue-600 mb-2 font-nunito text-xs sm:text-sm">📅 PERIODO</h3>
-            <p className="text-xs mb-1 font-nunito"><strong>INICIO:</strong> {formatDate(application.startDate)}</p>
-            <p className="text-xs mb-1 font-nunito"><strong>FIN:</strong> {formatDate(application.endDate)}</p>
-            <p className="text-xs mb-1 font-nunito"><strong>PLANTA:</strong> {formatTextToUpperCase(application.plantType)}</p>
-            <p className="text-xs font-nunito"><strong>UBICACIÓN:</strong> {formatTextToUpperCase(application.plantLocation)}</p>
-          </div>
-        </div>
-
-        {application.activities && (
-          <div className="bg-blue-50 rounded-xl sm:rounded-2xl p-2 sm:p-3 md:p-4 mb-4 sm:mb-6 md:mb-8">
-            <h3 className="font-semibold text-blue-600 mb-2 font-nunito text-xs sm:text-sm">🎯 ACTIVIDADES REALIZADAS</h3>
-            <p className="text-xs text-gray-700 leading-relaxed font-nunito">{formatTextToUpperCase(application.activities)}</p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 mt-4 sm:mt-6 md:mt-8 pt-3 sm:pt-4 md:pt-6 border-t border-gray-200">
-          <div className="text-center">
-            <div className="border-t border-gray-300 mt-2 sm:mt-3 md:mt-4 pt-1 sm:pt-2 mx-auto w-32 sm:w-40 md:w-48">
-              <p className="text-xs font-semibold text-gray-700 font-nunito">TUTOR ACADÉMICO</p>
-              <p className="text-xs text-gray-600 font-nunito">{formatTextToUpperCase(application.tutorName || 'TUTOR ASIGNADO')}</p>
-            </div>
-          </div>
-          <div className="text-center">
-            <div className="border-t border-gray-300 mt-2 sm:mt-3 md:mt-4 pt-1 sm:pt-2 mx-auto w-32 sm:w-40 md:w-48">
-              <p className="text-xs font-semibold text-gray-700 font-nunito">COORDINADOR</p>
-              <p className="text-xs text-gray-600 font-nunito">ADMIN TRUSTIFY</p>
-              <p className="text-xs text-gray-500 font-nunito">{new Date().toLocaleDateString()}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="text-center mt-3 sm:mt-4 md:mt-6">
-          <div className="inline-block border-2 border-blue-600 rounded-full p-2 sm:p-3 md:p-4">
-            <p className="text-xs font-semibold text-blue-600 font-nunito">CERTIFICADO VERIFICADO</p>
-            <p className="text-xs text-gray-600 font-nunito">TRUSTIFY SYSTEM</p>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   const downloadPDF = async () => {
     if (!selectedApplication) return;
 
     try {
+      setLoading(true);
       const element = document.getElementById('certificate-preview');
+      
       const canvas = await html2canvas(element, { 
         scale: 2,
         useCORS: true,
-        allowTaint: true
+        logging: false,
+        backgroundColor: '#ffffff'
       });
+      
       const imgData = canvas.toDataURL('image/png');
 
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -420,8 +902,10 @@ const StudentDashboard = () => {
       pdf.save(`CERTIFICADO-${selectedApplication.verificationCode}.pdf`);
       showMessage('success', '📄 CERTIFICADO DESCARGADO EXITOSAMENTE');
     } catch (error) {
-      console.error('❌ Error al descargar PDF:', error);
-      showMessage('error', 'Error al descargar certificado');
+      console.error('Error al descargar PDF:', error);
+      setError('Error al descargar certificado');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -430,7 +914,7 @@ const StudentDashboard = () => {
       setSelectedApplication(application);
       setShowCertificateModal(true);
     } else {
-      showMessage('error', '❌ SOLO PUEDES VER CERTIFICADOS APROBADOS');
+      setError('❌ SOLO PUEDES VER CERTIFICADOS APROBADOS');
     }
   };
 
@@ -439,9 +923,26 @@ const StudentDashboard = () => {
     setSelectedApplication(null);
   };
 
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      showMessage('success', '👋 SESIÓN CERRADA CORRECTAMENTE');
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 2000);
+    } catch (error) {
+      setError('❌ ERROR AL CERRAR SESIÓN');
+    }
+  };
+
   const renderLogo = () => {
     return (
-      <div className="w-10 h-10 bg-gradient-to-r from-blue-600 to-blue-800 rounded-2xl flex items-center justify-center shadow-lg">
+      <div 
+        className="w-10 h-10 rounded-lg flex items-center justify-center shadow-lg"
+        style={{
+          background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+        }}
+      >
         <span className="text-lg text-white">{siteConfig.logo}</span>
       </div>
     );
@@ -449,38 +950,79 @@ const StudentDashboard = () => {
 
   const counts = getApplicationCounts();
 
+  // Pagination controls
+  const paginationControls = totalPages > 1 && (
+    <div className="flex flex-wrap justify-center items-center gap-2 mt-6">
+      <button
+        onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+        disabled={currentPage === 1}
+        className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm flex-1 sm:flex-none min-w-[100px]"
+      >
+        ‹ Anterior
+      </button>
+      
+      <span className="px-3 py-2 text-sm text-gray-600 text-center flex-1 sm:flex-none">
+        Página {currentPage} de {totalPages}
+      </span>
+      
+      <button
+        onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+        disabled={currentPage === totalPages}
+        className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm flex-1 sm:flex-none min-w-[100px]"
+      >
+        Siguiente ›
+      </button>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header FIJO */}
-      <div className="fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-lg shadow-lg border-b border-gray-200 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center space-x-3 sm:space-x-4">
+      {/* Header */}
+      <div 
+        className="fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-lg shadow-lg border-b z-40"
+        style={{ borderColor: COLOR_PALETTE.primary.hex + '20' }}
+      >
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex justify-between items-center w-full">
+            <div className="flex items-center space-x-3">
               {renderLogo()}
               <div>
-                <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-blue-600 to-blue-800 bg-clip-text text-transparent font-nunito">
+                <h1 className="text-xl font-bold text-gray-900">
                   {siteConfig.name}
                 </h1>
-                <p className="text-xs sm:text-sm text-gray-600 font-nunito">{siteConfig.description}</p>
+                <p className="text-xs text-gray-600 hidden sm:block">
+                  {siteConfig.description}
+                </p>
               </div>
             </div>
             
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <div className="flex items-center space-x-2 sm:space-x-3 bg-gray-50 rounded-2xl px-3 sm:px-4 py-2">
-                <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gradient-to-r from-blue-600 to-blue-800 rounded-full flex items-center justify-center">
-                  <span className="text-white text-xs sm:text-sm">👤</span>
+            <div className="flex items-center space-x-3">
+              <div 
+                className="flex items-center space-x-2 rounded-lg px-3 py-2"
+                style={{ backgroundColor: COLOR_PALETTE.primary.hex + '10' }}
+              >
+                <div 
+                  className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{
+                    background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+                  }}
+                >
+                  <span className="text-white text-sm">👤</span>
                 </div>
-                <span className="text-xs sm:text-sm font-semibold text-gray-700 font-nunito">
-                  {auth.currentUser?.displayName || 'PASANTE'}
+                <span className="text-sm font-semibold text-gray-700 hidden sm:block">
+                  {auth.currentUser?.displayName || 'ADMIN'}
                 </span>
               </div>
               
               <button
                 onClick={() => setShowLogoutModal(true)}
-                className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 sm:px-6 sm:py-2 rounded-2xl hover:shadow-lg transform hover:scale-105 transition-all font-nunito font-semibold flex items-center space-x-2 text-xs sm:text-sm"
+                className="text-white px-4 py-2 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all flex items-center space-x-2 text-xs flex-shrink-0"
+                style={{
+                  background: `linear-gradient(135deg, #ef4444, #dc2626)`
+                }}
               >
                 <span>🔒</span>
-                <span className="hidden sm:inline">CERRAR SESIÓN</span>
+                <span className="hidden xs:inline">CERRAR SESIÓN</span>
               </button>
             </div>
           </div>
@@ -488,163 +1030,146 @@ const StudentDashboard = () => {
       </div>
 
       {/* Contenido principal */}
-      <div className="pt-20">
-        <div className="max-w-7xl mx-auto p-4 sm:p-6">
+      <div className="pt-16">
+        <div className="max-w-7xl mx-auto p-4">
           {/* Estado de carga */}
           {loadingApplications && (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-center">
+            <div 
+              className="border rounded-xl p-4 mb-6 text-center"
+              style={{ 
+                backgroundColor: COLOR_PALETTE.primary.hex + '10',
+                borderColor: COLOR_PALETTE.primary.hex + '20'
+              }}
+            >
               <div className="flex items-center justify-center space-x-3">
-                <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                <p className="text-blue-700 font-nunito font-semibold">CARGANDO SOLICITUDES...</p>
+                <div 
+                  className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin"
+                  style={{ borderColor: COLOR_PALETTE.primary.hex }}
+                ></div>
+                <p className="font-bold text-sm" style={{ color: COLOR_PALETTE.primary.hex }}>
+                  CARGANDO SOLICITUDES...
+                </p>
               </div>
             </div>
           )}
 
           {/* Estadísticas */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 sm:mb-8">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
             {[
-              { count: counts.total, label: 'TOTAL', color: 'from-gray-500 to-gray-600' },
-              { count: counts.pending, label: 'PENDIENTES', color: 'from-yellow-500 to-yellow-600' },
-              { count: counts.underReview, label: 'EN REVISIÓN', color: 'from-blue-500 to-blue-600' },
-              { count: counts.approved, label: 'APROBADAS', color: 'from-green-500 to-green-600' },
-              { count: counts.rejected, label: 'RECHAZADAS', color: 'from-red-500 to-red-600' }
+              { count: counts.total, label: 'TOTAL', color: 'from-gray-500 to-gray-600', icon: '📊' },
+              { count: counts.pending, label: 'PENDIENTES', color: 'from-yellow-500 to-yellow-600', icon: '⏳' },
+              { count: counts.underReview, label: 'EN REVISIÓN', color: 'from-blue-500 to-blue-600', icon: '🔍' },
+              { count: counts.approved, label: 'APROBADAS', color: 'from-green-500 to-green-600', icon: '✅' },
+              { count: counts.rejected, label: 'RECHAZADAS', color: 'from-red-500 to-red-600', icon: '❌' }
             ].map((stat, index) => (
-              <div key={index} className="bg-white rounded-xl sm:rounded-2xl shadow-lg p-3 sm:p-4 md:p-6 transform hover:scale-105 transition-all duration-300 border border-white/20">
-                <div className={`bg-gradient-to-r ${stat.color} w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center mx-auto mb-2 sm:mb-3`}>
-                  <span className="text-white text-sm sm:text-xl">
-                    {index === 0 ? '📊' : index === 1 ? '⏳' : index === 2 ? '🔍' : index === 3 ? '✅' : '❌'}
-                  </span>
+              <div 
+                key={index} 
+                className="bg-white rounded-lg shadow-lg p-3 transform hover:scale-105 transition-all duration-300 border border-white/20"
+              >
+                <div className={`bg-gradient-to-r ${stat.color} w-8 h-8 rounded-lg flex items-center justify-center mx-auto mb-2`}>
+                  <span className="text-white text-base">{stat.icon}</span>
                 </div>
-                <p className="text-xl sm:text-2xl md:text-3xl font-bold text-center text-gray-800 font-nunito">{stat.count}</p>
-                <p className="text-xs text-gray-600 text-center font-nunito font-semibold">{stat.label}</p>
+                <p className="text-xl font-bold text-center text-gray-800">{stat.count}</p>
+                <p className="text-xs text-gray-600 text-center font-bold">{stat.label}</p>
               </div>
             ))}
           </div>
 
-          {/* Botón Nueva Solicitud */}
+      
           <div className="flex justify-end mb-6">
             <button
               onClick={() => setShowForm(true)}
               disabled={loading}
-              className="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-3 sm:px-8 sm:py-4 rounded-2xl hover:shadow-lg transform hover:scale-105 transition-all duration-300 font-nunito font-bold flex items-center space-x-2 text-sm sm:text-base"
+              className="text-white px-6 py-3 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 flex items-center space-x-2 text-sm w-full sm:w-auto justify-center"
+              style={{
+                background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+              }}
             >
               <span className="text-lg">+</span>
               <span>NUEVA SOLICITUD</span>
             </button>
           </div>
 
-          {/* Lista de Solicitudes - AHORA ORDENADAS CORRECTAMENTE */}
-          <div className="bg-white/95 backdrop-blur-lg rounded-2xl sm:rounded-3xl shadow-2xl p-4 sm:p-6 border border-white/20">
-            <div className="flex items-center mb-4 sm:mb-6">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-r from-blue-600 to-blue-800 rounded-xl sm:rounded-2xl flex items-center justify-center mr-2 sm:mr-3">
-                <span className="text-white text-sm sm:text-lg">📋</span>
+
+          <div className="bg-white/95 backdrop-blur-lg rounded-xl shadow-2xl p-4 border border-white/20">
+            <div className="flex items-center mb-4">
+              <div 
+                className="w-8 h-8 rounded-lg flex items-center justify-center mr-3"
+                style={{
+                  background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+                }}
+              >
+                <span className="text-white text-base">📋</span>
               </div>
-              <h3 className="text-lg sm:text-xl font-bold text-blue-600 font-nunito">MIS SOLICITUDES</h3>
-              <span className="ml-2 text-sm text-gray-500">(Más recientes primero)</span>
+              <h3 className="text-lg font-bold" style={{ color: COLOR_PALETTE.primary.hex }}>
+                MIS SOLICITUDES
+              </h3>
+              <span className="ml-2 text-xs text-gray-500 hidden sm:inline">(Más recientes primero)</span>
             </div>
 
             <div className="space-y-4">
               {loadingApplications ? (
-                <div className="text-center py-8">
-                  <div className="flex items-center justify-center space-x-3">
-                    <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-gray-600 font-nunito">CARGANDO SOLICITUDES...</p>
-                  </div>
-                </div>
+                <>
+                  <ApplicationSkeleton />
+                  <ApplicationSkeleton />
+                  <ApplicationSkeleton />
+                </>
               ) : myApplications.length === 0 ? (
-                <div className="text-center py-8 sm:py-12">
-                  <div className="text-gray-300 text-4xl sm:text-6xl mb-3 sm:mb-4">📝</div>
-                  <h3 className="text-lg sm:text-xl font-bold text-gray-700 mb-2 sm:mb-3 font-nunito">NO HAY SOLICITUDES</h3>
-                  <p className="text-gray-500 mb-4 sm:mb-6 font-nunito text-sm sm:text-base">COMIENZA CREANDO TU PRIMERA SOLICITUD</p>
+                <div className="text-center py-8">
+                  <div className="text-gray-300 text-4xl mb-3">📝</div>
+                  <h3 className="text-lg font-bold text-gray-700 mb-2">NO HAY SOLICITUDES</h3>
+                  <p className="text-gray-500 mb-4">COMIENZA CREANDO TU PRIMERA SOLICITUD</p>
                   <button
                     onClick={() => setShowForm(true)}
-                    className="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-2 sm:px-8 sm:py-3 rounded-2xl hover:shadow-lg transform hover:scale-105 transition-all duration-300 font-nunito font-bold text-sm sm:text-base"
+                    className="text-white px-6 py-3 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300 text-sm w-full sm:w-auto"
+                    style={{
+                      background: `linear-gradient(135deg, ${COLOR_PALETTE.primary.hex}, ${COLOR_PALETTE.secondary})`
+                    }}
                   >
                     CREAR PRIMERA SOLICITUD
                   </button>
                 </div>
               ) : (
-                myApplications.map((application) => {
-                  const statusInfo = getStatusInfo(application.status);
-                  const duration = calculateDuration(application.startDate, application.endDate);
+                <>
+                  {currentApplications.map((application) => (
+                    <ApplicationCard
+                      key={application.id}
+                      application={application}
+                      onViewCertificate={openCertificateModal}
+                      onDownloadPDF={downloadPDF}
+                    />
+                  ))}
                   
-                  return (
-                    <div key={application.id} className="border border-gray-200 rounded-xl sm:rounded-2xl p-4 sm:p-6 hover:shadow-lg transition-all duration-300 bg-white">
-                      <div className="flex justify-between items-start mb-3 sm:mb-4">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-base sm:text-lg font-bold text-gray-900 font-nunito truncate">
-                            {formatTextToUpperCase(application.firstName)} {formatTextToUpperCase(application.lastName)}
-                          </h4>
-                          <p className="text-xs sm:text-sm text-gray-600 font-nunito truncate">
-                            {formatTextToUpperCase(application.institution)} - {formatTextToUpperCase(application.program)}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Creado: {formatDate(application.createdAt)}
-                          </p>
-                        </div>
-                        <span className={`px-2 py-1 sm:px-4 sm:py-2 rounded-full text-xs sm:text-sm font-semibold border ${statusInfo.color} font-nunito flex-shrink-0 ml-2`}>
-                          {statusInfo.text}
-                        </span>
-                      </div>
-
-                      {/* Código de verificación */}
-                      <div className="bg-gray-50 rounded-lg sm:rounded-xl p-2 sm:p-4 mb-3 sm:mb-4">
-                        <p className="text-xs font-semibold text-gray-700 font-nunito mb-1">CÓDIGO DE VERIFICACIÓN:</p>
-                        <p className="text-sm sm:text-lg font-bold text-blue-600 font-mono tracking-wide truncate">
-                          {application.verificationCode || application.id}
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4 text-xs sm:text-sm mb-3 sm:mb-4">
-                        <div>
-                          <p className="font-nunito"><strong>PERÍODO:</strong> {formatDate(application.startDate)} - {formatDate(application.endDate)}</p>
-                          <p className="font-nunito"><strong>DOCUMENTO:</strong> {formatTextToUpperCase(application.documentNumber)}</p>
-                        </div>
-                        <div>
-                          <p className="font-nunito"><strong>DURACIÓN:</strong> {duration} MESES</p>
-                          <p className="font-nunito"><strong>UBICACIÓN:</strong> {formatTextToUpperCase(application.plantLocation)}</p>
-                        </div>
-                      </div>
-
-                      {/* Acciones */}
-                      <div className="flex flex-wrap gap-2 sm:gap-3">
-                        <button
-                          onClick={() => openCertificateModal(application)}
-                          disabled={application.status !== 'approved'}
-                          className={`px-3 py-2 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl hover:shadow-lg transform hover:scale-105 transition-all duration-300 font-nunito font-semibold flex items-center space-x-1 sm:space-x-2 text-xs sm:text-sm ${
-                            application.status === 'approved' 
-                              ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white' 
-                              : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                          }`}
-                        >
-                          <span>👁️</span>
-                          <span>VER CERTIFICADO</span>
-                        </button>
-                        
-                        {application.status === 'approved' && (
-                          <button
-                            onClick={() => {
-                              setSelectedApplication(application);
-                              setTimeout(downloadPDF, 100);
-                            }}
-                            className="bg-gradient-to-r from-green-500 to-green-600 text-white px-3 py-2 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl hover:shadow-lg transform hover:scale-105 transition-all duration-300 font-nunito font-semibold flex items-center space-x-1 sm:space-x-2 text-xs sm:text-sm"
-                          >
-                            <span>📥</span>
-                            <span>DESCARGAR PDF</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
+                  {paginationControls}
+                </>
               )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Los modales restantes se mantienen igual */}
-      {/* ... (mantener los mismos modales del código anterior) */}
+      <ApplicationFormModal
+        show={showForm}
+        onClose={() => setShowForm(false)}
+        onSubmit={handleSubmit}
+        formData={formData}
+        setFormData={setFormData}
+        loading={loading}
+      />
+
+      {showCertificateModal && selectedApplication && (
+        <CertificateModal
+          application={selectedApplication}
+          onClose={closeCertificateModal}
+          onDownload={downloadPDF}
+        />
+      )}
+
+      <LogoutModal
+        show={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleLogout}
+      />
     </div>
   );
 };
